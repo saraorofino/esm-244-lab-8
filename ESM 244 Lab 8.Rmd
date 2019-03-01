@@ -16,14 +16,221 @@ library(tidyverse)
 library(plotly)
 library(janitor)
 library(RColorBrewer)
+
 library(factoextra)
 library(dendextend)
 library(NbClust)
 library(cluster)
 library(ggdendro)
+
 library(pdftools)
 library(tidytext)
 library(wordcloud)
+
+```
+
+
+###Part 1. k-means clustering 
+
+```{r}
+
+iris_nice <- iris %>% 
+  clean_names()
+
+ggplot(iris_nice) +
+  geom_point(aes(x = petal_length, y = petal_width, color = species))
+```
+
+How many clusters do YOU think should exist, R?
+
+```{r}
+# Use NbClust() to determine the best number of clusters (uses 30 algorithims to determine cluster numbers)
+# Give it a minimum and maximum number of clusters to consider and a method (we are using kmeans for clustering)
+
+number_est <- NbClust(iris_nice[1:4], min.nc = 2, max.nc = 10, method = "kmeans")
+
+# Since we have 3 species and almost as many algorithims suggest 3 as 2 we'll stick with three clusters
+```
+
+Performing k-means clustering with 3 groups:
+
+```{r}
+
+iris_km <- kmeans(iris_nice[1:4], 3)
+
+# How many observations in each cluster?
+iris_km$size
+
+# What observations are associated with each cluster? 
+iris_km$centers
+
+# What cluster has each observation been assigned to?
+iris_km$cluster
+
+# Bind the cluster assignment to the original data
+iris_cl <- data.frame(iris_nice, cluster_no = factor(iris_km$cluster))
+
+# Basic ggplots for visualization 
+ggplot(iris_cl) +
+  geom_point(aes(x = sepal_length, y = sepal_width, color = cluster_no))
+
+ggplot(iris_cl) +
+  geom_point(aes(x= petal_length, y = petal_width, color = cluster_no, pch = species)) +
+  scale_color_brewer(palette = "Set2")
+
+# Add plotly for 3D
+
+plot_ly(x = iris_cl$petal_length, 
+        y = iris_cl$petal_width, 
+        z = iris_cl$sepal_width,
+        type = "scatter3d",
+        color = iris_cl$cluster_no,
+        symbol = iris_cl$species,
+        colors = "Set1")
+```
+
+###Part 2. Heirarchial cluster analysis 
+
+```{r, message = FALSE}
+
+wb_env <- read_csv("wb_env.csv")
+
+# Only keep the top 20 GHG emitters (to simply visualization in lab)
+
+wb_ghg_20 <- wb_env %>% 
+  arrange(-ghg) %>%
+  head(20)
+
+# Scale the data in the last five columns (keeps it as a list) and coerce back to a dataframe
+wb_scaled <- as.data.frame(scale(wb_ghg_20[3:7]))
+
+# Notice its only the scaled data in this dataframe, doesn't have the countries associated with the scaled data - add country names as row names in this dataframe 
+rownames(wb_scaled) <- wb_ghg_20$name
+
+# Calculate the dissimilarity matrix (grid of distances between observations) using dist() before we can do clustering
+diss <- dist(wb_scaled, method = "euclidean")
+
+
+# Use hierarchial agglomerative clustering by complete linkage (really common type of clustering)
+# Default setting is complete linkage
+hc_complete <- hclust(diss, method = "complete")
+
+# View basic dendrogram with baseR plot()
+plot(hc_complete)
+
+# Divisive heirarchial clustering (just to compare to agglomerative)
+hc_div <- diana(diss)
+plot(hc_div)
+
+# Compare dendrograms through a tanglegram 
+# First you have to change the class of both things to dendrograms to be able to combine them 
+
+dend1 <- as.dendrogram(hc_complete)
+dend2 <- as.dendrogram(hc_div)
+
+# tanglegram() is in the dendextend package 
+tanglegram(dend1, dend2)
+
+# Can quantify the extent of the tangling - check the lab key for specifics
+
+
+# Create dendrograms similar to ggplot with ggdendro()
+ggdendrogram(hc_complete,
+             rotate = TRUE) +
+  theme_minimal()
+
+# See example in the key for taking the data into a format you can use with ggplot()
+```
+
+###Part 3. Intro to Text Analysis: pdftools, stringr, tidytext
+
+Check out the link to the Eco-data-science repo on the key for more indepth text analysis information
+
+```{r}
+
+greta_thunberg <- file.path("greta_thunberg.pdf") #Create a file path for grabbing the pdf text 
+thunberg_text <- pdf_text(greta_thunberg) #tell pdftools where to find the text using the file path you made 
+
+# wrangling with pdf tools
+
+thunberg_df <- data.frame(text = thunberg_text) %>%  # Create dataframe (notice its all in one line)
+  mutate(text_full = str_split(text, '\\n')) %>% # Split the lines by \\n (which was delineated when file was read in)
+  unnest(text_full) # unnest text_full to see it all by different lines
+  
+speech_text <- thunberg_df %>% 
+  select(text_full) %>% 
+  slice(4:18) #keep data based on row specifications (only keep data from rows 4-18)
+
+
+# Further break up the dataframe into different words using everything in the text_full column:
+sep_words <- speech_text %>% 
+  unnest_tokens(word, text_full) #breaks all words into their own row 
+
+# Count how many times each word occurs:
+word_count <- sep_words %>% 
+  count(word, sort = TRUE)
+
+# Remove stop words (a, the, at etc.) from the default lexicon "stop_words"
+words_stop <- sep_words %>% 
+  anti_join(stop_words)
+
+```
+**Brief Intro to Sentiment Analysis:**
+
+"The three general-purpose lexicons are
+
+- AFINN from Finn Årup Nielsen,   
+- bing from Bing Liu and collaborators, and  
+- nrc from Saif Mohammad and Peter Turney
+
+All three of these lexicons are based on unigrams, i.e., single words. These lexicons contain many English words and the words are assigned scores for positive/negative sentiment, and also possibly emotions like joy, anger, sadness, and so forth. The nrc lexicon categorizes words in a binary fashion (“yes”/“no”) into categories of positive, negative, anger, anticipation, disgust, fear, joy, sadness, surprise, and trust. The bing lexicon categorizes words in a binary fashion into positive and negative categories. The AFINN lexicon assigns words with a score that runs between -5 and 5, with negative scores indicating negative sentiment and positive scores indicating positive sentiment. All of this information is tabulated in the sentiments dataset, and tidytext provides a function get_sentiments() to get specific sentiment lexicons without the columns that are not used in that lexicon."
+
+```{r}
+
+# Example of positive words from the afinn lexicon: 
+pos_words <- get_sentiments("afinn") %>% 
+  filter(score == 5 | score == 4) %>% 
+  head(20)
+
+# Example of neutral words from the afinn lexicon:
+neutral_words <- get_sentiments("afinn") %>% 
+  filter(between(score, -1,1)) %>% 
+  head(20)
+neutral_words
+```
+
+Bind some lexicon information to our actual speech words (from non-stop words)  
+
+```{r}
+
+# inner_join() only binds things that occur in both dataframes - use this to bind lexicon scores with words that are found in the speech - note words will be deleted if they aren't found in the afinn lexicon 
+
+
+sent_afinn <- words_stop %>% 
+  inner_join(get_sentiments("afinn"))
+
+sent_nrc <- words_stop %>% 
+  inner_join(get_sentiments("nrc"))
+
+# Examples for what to do now once data is tidy and usable: 
+
+nrc_counts <- sent_nrc %>% 
+  group_by(sentiment) %>% 
+  tally()
+
+```
+
+Word Clouds!
+
+```{r}
+
+wordcloud(word_count$word,
+          freq = word_count$n,
+          min.freq = 1,
+          max.words = 65,
+          scale = c(2,0.1),
+          colors = brewer.pal(3, "Dark2"))
+
 
 ```
 
